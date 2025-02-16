@@ -1,0 +1,3 @@
+[tool.ruff]
+exclude = ["*.pyi", ".venv"]
+line-length = 150

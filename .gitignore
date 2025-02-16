@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+.venv/
+*.py[cod]
+.pytest_cache/
+add_init.py
+
+# IDE
+.vscode/*
+!.vscode/settings.json
+
+# Environment
+.env
+docker-compose*.yml
+
+# Logs
+*.log
+app.log
+arquivos/
+raw_messages
+
+# Documentation
+docs/
+prompts/
+notes.txt
+notes.md
+python examples
+tree.txt
+
+# Tests
+test.py
+db_connector.py
+db_test.py
+.coverage
+htmlcov
+client.http
+
+# Credentials
+evo-chats-3351d4ca51f7.json
+
+# docker volume
+db_data

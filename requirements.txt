@@ -1,0 +1,6 @@
+pymysql
+requests
+python-dotenv
+pre-commit
+ruff
+basedpyright

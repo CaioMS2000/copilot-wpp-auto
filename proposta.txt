@@ -1,0 +1,58 @@
+quero programar em python
+Descrição do Problema: Sistema de Automação de Atendimento via WhatsApp
+Contexto:
+Você está desenvolvendo um sistema de automação de atendimento via WhatsApp para uma empresa. O sistema deve permitir que os clientes interajam com a empresa de forma automatizada, escolhendo opções em um menu e sendo redirecionados para os departamentos apropriados. O sistema também deve gerenciar a comunicação entre clientes e agentes humanos, garantindo que as mensagens sejam encaminhadas corretamente e que os clientes sejam atendidos de forma eficiente.
+
+Requisitos Funcionais:
+Interação Inicial:
+
+O cliente envia uma mensagem inicial para o sistema via WhatsApp.
+
+O sistema responde com um menu de opções (por exemplo, departamentos da empresa).
+
+Redirecionamento para Departamentos:
+
+Se o cliente escolher um departamento, o sistema deve redirecioná-lo para o atendimento daquele setor.
+
+O sistema deve decidir como gerenciar o fluxo de atendimento:
+
+Abordagem 1: Tentar encaminhar o cliente diretamente para um agente disponível.
+
+Abordagem 2: Sempre colocar o cliente em uma fila de espera e notificar os agentes sobre a nova entrada.
+
+A decisão sobre qual abordagem adotar deve ser justificada e implementada.
+
+Fila de Atendimento:
+
+O sistema deve gerenciar filas de espera para cada departamento.
+
+Quando um agente finaliza o atendimento de um cliente, o sistema deve pegar o próximo cliente da fila e encaminhar as mensagens para o agente.
+
+Comunicação entre Cliente e Agente:
+
+Toda a comunicação entre cliente e agente passa pelo sistema.
+
+O sistema deve garantir que as mensagens sejam encaminhadas corretamente, mantendo o contexto da conversa.
+
+O agente interage apenas via WhatsApp, sem uma interface adicional.
+
+Notificações para Agentes:
+
+Enquanto um agente está ocupado, o sistema deve notificá-lo periodicamente sobre o número de clientes na fila de espera.
+
+Quando um novo cliente é redirecionado para o agente, o sistema deve informar o agente sobre o novo atendimento.
+
+Requisitos Não Funcionais:
+Arquitetura:
+
+O sistema deve ser desenvolvido com princípios de Domain-Driven Design (DDD) e separação em camadas (por exemplo, repositories -> use cases -> services -> controllers).
+
+A comunicação entre camadas deve seguir o princípio de dependência unidirecional (de dentro para fora).
+
+Escalabilidade:
+
+O sistema deve ser capaz de lidar com um aumento no número de clientes e agentes.
+
+acho que seria uma boa ideia deixar bem claro sobre o fluxo cliente -> sistema -> agente e agente -> sistema -> cliente, que apesar de ser pelo whatsapp, o agente só vai estar usando uma "janela de conversa", que é com o sistema, logo teremos que dar um jeito de no conteudo da mensagem deixar bem claro com quem o agente esta falando ou o que ele esta fazendo no momento, seja olhando a fila, sendo notificado, mandando tirar alguem da fila, entre muitas outras possibilidades
+
+sobre o formato do objeto json que chega da API do whatsapp, existem diferentes formatos, pois a mensagem pode ser arquivo, video, audio, imagem, texto puro, texto porem sendo uma resposta pra quando mandam um menu, etc.

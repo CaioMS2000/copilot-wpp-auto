@@ -1,0 +1,13 @@
+{
+    "files.exclude": {
+        "**/__pycache__": true,
+    },
+    "editor.defaultFormatter": "charliermarsh.ruff",
+    "[python]": {
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit",
+            "source.fixAll.ruff": "explicit",
+        }
+    },
+    "editor.formatOnSave": true,
+}

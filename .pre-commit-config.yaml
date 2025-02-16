@@ -1,0 +1,14 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.1.14  # Use a versão mais recente!  Verifique no repositório do Ruff.
+    hooks:
+      - id: ruff
+        args: [ --fix ] # Executa o ruff e aplica correções automaticamente
+
+      # (Opcional) Formatação com Ruff (substitui isort e black, se você os usava):
+      - id: ruff-format
+
+  - repo: https://github.com/DetachHead/basedpyright-pre-commit-mirror
+    rev: v1.13.0 # or whatever the latest version is at the time
+    hooks:
+        - id: basedpyright
