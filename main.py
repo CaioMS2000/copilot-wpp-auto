@@ -1,6 +1,8 @@
+from datetime import datetime
 from typing import cast
+from uuid import uuid4
 from fastapi import FastAPI, HTTPException
-from src.domain.messages import WhatsAppMessage
+from src.domain.messages import MessageType, WhatsAppMessage
 from src.domain.services import MessageRouter
 from src.infrastructure.database.connection import Database
 from src.infrastructure.whatsapp.config import WhatsAppConfig
@@ -23,7 +25,7 @@ router = MessageRouter(
 )
 
 @app.post("/webhook")
-async def webhook(data: dict[str, object]):
+async def webhook(data: dict[str, str]):
     try:
         # Converte o payload do webhook para nosso formato interno
         message = convert_webhook_to_message(data)
@@ -36,10 +38,24 @@ async def webhook(data: dict[str, object]):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-def convert_webhook_to_message(data: dict[str, object]) -> WhatsAppMessage|None:
+
+def convert_webhook_to_message(data: dict[str, str]) -> WhatsAppMessage|None:
     """
     Converte o payload do webhook do WhatsApp para nosso formato interno
     Esta é uma implementação simplificada - você precisará adaptá-la ao formato real do webhook
     """
     # Implementar conversão do formato do webhook para WhatsAppMessage
-    pass
+    # Exemplo simplificado:
+    if "messages" in data:
+        message_data = data["messages"][0]
+
+        return WhatsAppMessage(
+            message_id=uuid4(),
+            sender_id=message_data["from"], # pyright: ignore[reportArgumentType]
+            recipient_id=message_data["to"], # pyright: ignore[reportArgumentType]
+            content=message_data["text"]["body"], # pyright: ignore[reportArgumentType]
+            message_type=MessageType.TEXT,
+            timestamp=datetime.now()
+        )
+
+    return None

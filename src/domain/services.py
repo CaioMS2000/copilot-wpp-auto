@@ -1,8 +1,8 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 from .interfaces.messaging import MessageSender
-from .entities import CustomerStatus
+from .entities import Customer, CustomerStatus
 from .messages import WhatsAppMessage
 from .repositories import CustomerRepository, AgentRepository
 
@@ -26,12 +26,22 @@ class MessageRouter:
         else:
             return await self._handle_customer_message(message)
     
+
     async def _handle_customer_message(self, message: WhatsAppMessage) -> list[WhatsAppMessage]:
         customer = await self.customer_repo.get(message.sender_id)
         
         if not customer:
             # Novo cliente
             return self._send_welcome_menu(message.sender_id)
+        
+        # Verifica se a conversa expirou
+        if customer.last_interaction and (datetime.now() - customer.last_interaction) > timedelta(seconds=customer.conversation_expiration):
+            # Reinicia a conversa enviando o menu novamente
+            return self._send_welcome_menu(message.sender_id)
+        
+        # Atualiza a última interação
+        customer.last_interaction = datetime.now()
+        await self.customer_repo.update(customer)
         
         if customer.status == CustomerStatus.WAITING:
             return [WhatsAppMessage.create_system_message(
@@ -48,7 +58,8 @@ class MessageRouter:
                 content=f"CLIENTE {message.sender_id}: {message.content}",
                 message_type=message.message_type,
                 timestamp=datetime.now()
-            )]        
+            )]
+
         return []
     
     async def _handle_agent_message(self, message: WhatsAppMessage) -> list[WhatsAppMessage]:
@@ -77,6 +88,7 @@ class MessageRouter:
             timestamp=datetime.now()
         )]
     
+
     def _send_welcome_menu(self, customer_id: str) -> list[WhatsAppMessage]:
         menu_content = """
         Bem-vindo ao nosso atendimento! 
@@ -86,8 +98,20 @@ class MessageRouter:
         2. Suporte
         3. Financeiro
         """
+        # Reinicia o status do cliente
+        customer = Customer(
+            customer_id=customer_id,
+            department=None,
+            status=CustomerStatus.WAITING,
+            last_interaction=datetime.now()
+        )
+
+        _ = self.customer_repo.update(customer)
+        
         return [WhatsAppMessage.create_system_message(customer_id, menu_content)]
     
+
+
     async def _handle_agent_command(self, agent_id: str, command: str) -> list[WhatsAppMessage]:
         """
         Processa comandos especiais dos agentes:
@@ -103,14 +127,36 @@ class MessageRouter:
             # Implementar lógica para pegar próximo cliente
             pass
         elif command == "/encerrar":
-            # Implementar lógica para encerrar atendimento
-            pass
+            # Encerra o atendimento atual
+            agent = await self.agent_repo.get_by_id(agent_id)
+            if agent and agent.current_customer_id:
+                customer = await self.customer_repo.get(agent.current_customer_id)
+                if customer:
+                    customer.status = CustomerStatus.FINISHED
+                    customer.current_agent_id = None
+                    customer.last_interaction = datetime.now()
+                    await self.customer_repo.update(customer)
+                
+                agent.current_customer_id = None
+                await self.agent_repo.update_agent_status(agent_id, True)
+                
+                return [
+                    WhatsAppMessage.create_system_message(
+                        agent_id,
+                        "Atendimento encerrado com sucesso."
+                    ),
+                    WhatsAppMessage.create_system_message(
+                        agent.current_customer_id if agent.current_customer_id else "",
+                        "Atendimento encerrado. Obrigado por entrar em contato!"
+                    )
+                ]
         
         return [WhatsAppMessage.create_system_message(
             agent_id,
             "Comando processado com sucesso."
         )]
     
+
     async def handle_incoming_message(self, message: WhatsAppMessage) -> None:
         """
         Processa uma mensagem recebida e envia as respostas apropriadas
@@ -123,3 +169,9 @@ class MessageRouter:
             if not success:
                 # Aqui você pode implementar retry logic ou logging
                 print(f"Falha ao enviar mensagem para {response.recipient_id}")
+        
+        # Atualiza a última interação do cliente
+        customer = await self.customer_repo.get(message.sender_id)
+        if customer:
+            customer.last_interaction = datetime.now()
+            await self.customer_repo.update(customer)

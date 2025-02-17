@@ -22,6 +22,8 @@ class Customer:
     status: CustomerStatus
     current_agent_id: str | None = None
     waiting_since: datetime | None = None
+    last_interaction: datetime | None = None
+    conversation_expiration: int = 3600
 
 
 @dataclass

@@ -19,7 +19,9 @@ class SQLAlchemyCustomerRepository(CustomerRepository):
                 department=customer.department,
                 status=customer.status,
                 current_agent_id=customer.current_agent_id,
-                waiting_since=customer.waiting_since
+                waiting_since=customer.waiting_since,
+                last_interaction=customer.last_interaction,
+                conversation_expiration=customer.conversation_expiration,
             )
             session.add(db_customer)
             await session.commit()
@@ -56,6 +58,8 @@ class SQLAlchemyCustomerRepository(CustomerRepository):
                 db_customer.status = customer.status
                 db_customer.current_agent_id = customer.current_agent_id
                 db_customer.waiting_since = customer.waiting_since
+                db_customer.last_interaction = customer.last_interaction
+                db_customer.conversation_expiration = customer.conversation_expiration
                 await session.commit()
     
     async def get_waiting_customers(self, department: Department) -> list[Customer]:
