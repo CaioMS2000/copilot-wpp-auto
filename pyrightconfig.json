@@ -1,3 +1,4 @@
 {
-    "reportUnannotatedClassAttribute": "hint"
+    "reportUnannotatedClassAttribute": "hint",
+    "reportAny": "information",
 }

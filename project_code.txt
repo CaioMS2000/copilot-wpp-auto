@@ -1,0 +1,698 @@
+
+================================================================================
+File: main.py
+================================================================================
+
+from typing import cast
+from fastapi import FastAPI, HTTPException
+from src.domain.messages import WhatsAppMessage
+from src.domain.services import MessageRouter
+from src.infrastructure.database.connection import Database
+from src.infrastructure.whatsapp.config import WhatsAppConfig
+from src.infrastructure.whatsapp.sender import WhatsAppMessageSender
+from src.infrastructure.repositories.sqlalchemy import SQLAlchemyCustomerRepository, SQLAlchemyAgentRepository
+
+app = FastAPI()
+config = WhatsAppConfig(
+        phone_number_id="your_phone_number_id",
+        access_token="your_access_token"
+    )
+message_sender = WhatsAppMessageSender(config)
+database = Database("postgresql+asyncpg://user:password@localhost/whatsapp_service")
+customer_repo = SQLAlchemyCustomerRepository(database)
+agent_repo = SQLAlchemyAgentRepository(database)
+router = MessageRouter(
+    customer_repo=customer_repo,
+    agent_repo=agent_repo,
+    message_sender=message_sender
+)
+
+@app.post("/webhook")
+async def webhook(data: dict[str, object]):
+    try:
+        # Converte o payload do webhook para nosso formato interno
+        message = convert_webhook_to_message(data)
+        message = cast(WhatsAppMessage, message)
+        
+        # Processa a mensagem e envia respostas
+        await router.handle_incoming_message(message)
+        
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+def convert_webhook_to_message(data: dict[str, object]) -> WhatsAppMessage|None:
+    """
+    Converte o payload do webhook do WhatsApp para nosso formato interno
+    Esta é uma implementação simplificada - você precisará adaptá-la ao formato real do webhook
+    """
+    # Implementar conversão do formato do webhook para WhatsAppMessage
+    pass
+
+================================================================================
+File: src/infrastructure/database/connection.py
+================================================================================
+
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+
+from .models import Base
+
+
+class Database:
+    def __init__(self, connection_string: str):
+        self.engine = create_async_engine(connection_string)
+        self.async_session = async_sessionmaker(
+            self.engine, 
+            class_=AsyncSession,
+            expire_on_commit=False
+        )
+    
+    async def create_tables(self):
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+
+================================================================================
+File: src/infrastructure/database/models.py
+================================================================================
+
+from datetime import datetime, timezone
+from sqlalchemy import Enum, String, Boolean, DateTime, ForeignKey
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from src.domain.entities import Department, CustomerStatus
+
+class Base(DeclarativeBase):
+    pass
+
+class CustomerModel(Base):
+    __tablename__: str = "customers"
+    
+    customer_id: Mapped[str] = mapped_column(String, primary_key=True)
+    department: Mapped[Department | None] = mapped_column(Enum(Department))
+    status: Mapped[CustomerStatus] = mapped_column(Enum(CustomerStatus))
+    current_agent_id: Mapped[str | None] = mapped_column(String, ForeignKey("agents.agent_id"))
+    waiting_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        default=lambda: datetime.now(timezone.utc)
+    )
+
+class AgentModel(Base):
+    __tablename__: str = "agents"
+    
+    agent_id: Mapped[str] = mapped_column(String, primary_key=True)
+    department: Mapped[Department] = mapped_column(Enum(Department))
+    is_available: Mapped[bool] = mapped_column(Boolean, default=True)
+    current_customer_id: Mapped[str | None] = mapped_column(String, ForeignKey("customers.customer_id"))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), 
+        default=lambda: datetime.now(timezone.utc)
+    )
+
+================================================================================
+File: src/infrastructure/repositories/sqlalchemy.py
+================================================================================
+
+from typing import override
+from sqlalchemy import select
+from src.domain.entities import Customer, Agent, Department, CustomerStatus
+from src.domain.repositories import CustomerRepository, AgentRepository
+from ..database.models import CustomerModel, AgentModel
+from ..database.connection import Database
+
+class SQLAlchemyCustomerRepository(CustomerRepository):
+    db: Database
+
+    def __init__(self, database: Database):
+        self.db = database
+    
+    @override
+    async def add(self, customer: Customer) -> None:
+        async with self.db.async_session() as session:
+            db_customer = CustomerModel(
+                customer_id=customer.customer_id,
+                department=customer.department,
+                status=customer.status,
+                current_agent_id=customer.current_agent_id,
+                waiting_since=customer.waiting_since
+            )
+            session.add(db_customer)
+            await session.commit()
+    
+    @override
+    async def get(self, customer_id: str) -> Customer | None:
+        async with self.db.async_session() as session:
+            result = await session.execute(
+                select(CustomerModel).where(CustomerModel.customer_id == customer_id)
+            )
+            db_customer = result.scalar_one_or_none()
+            
+            if not db_customer:
+                return None
+            
+            return Customer(
+                customer_id=db_customer.customer_id,
+                department=db_customer.department,
+                status=db_customer.status,
+                current_agent_id=db_customer.current_agent_id,
+                waiting_since=db_customer.waiting_since
+            )
+    
+    @override
+    async def update(self, customer: Customer) -> None:
+        async with self.db.async_session() as session:
+            result = await session.execute(
+                select(CustomerModel).where(CustomerModel.customer_id == customer.customer_id)
+            )
+            db_customer = result.scalar_one_or_none()
+            
+            if db_customer:
+                db_customer.department = customer.department
+                db_customer.status = customer.status
+                db_customer.current_agent_id = customer.current_agent_id
+                db_customer.waiting_since = customer.waiting_since
+                await session.commit()
+    
+    async def get_waiting_customers(self, department: Department) -> list[Customer]:
+        async with self.db.async_session() as session:
+            result = await session.execute(
+                select(CustomerModel)
+                .where(
+                    CustomerModel.department == department,
+                    CustomerModel.status == CustomerStatus.WAITING
+                )
+                .order_by(CustomerModel.waiting_since)
+            )
+            db_customers = result.scalars().all()
+            
+            return [
+                Customer(
+                    customer_id=db_customer.customer_id,
+                    department=db_customer.department,
+                    status=db_customer.status,
+                    current_agent_id=db_customer.current_agent_id,
+                    waiting_since=db_customer.waiting_since
+                )
+                for db_customer in db_customers
+            ]
+
+class SQLAlchemyAgentRepository(AgentRepository):
+    def __init__(self, database: Database):
+        self.db = database
+    
+    @override
+    async def get_available_agent(self, department: Department) -> Agent | None:
+        async with self.db.async_session() as session:
+            result = await session.execute(
+                select(AgentModel)
+                .where(
+                    AgentModel.department == department,
+                    AgentModel.is_available == True
+                )
+                .limit(1)
+            )
+            db_agent = result.scalar_one_or_none()
+            
+            if not db_agent:
+                return None
+            
+            return Agent(
+                agent_id=db_agent.agent_id,
+                department=db_agent.department,
+                is_available=db_agent.is_available,
+                current_customer_id=db_agent.current_customer_id
+            )
+    
+    @override
+    async def get_by_id(self, agent_id: str) -> Agent | None:
+        async with self.db.async_session() as session:
+            result = await session.execute(
+                select(AgentModel).where(AgentModel.agent_id == agent_id)
+            )
+            db_agent = result.scalar_one_or_none()
+            
+            if not db_agent:
+                return None
+            
+            return Agent(
+                agent_id=db_agent.agent_id,
+                department=db_agent.department,
+                is_available=db_agent.is_available,
+                current_customer_id=db_agent.current_customer_id
+            )
+    
+    @override
+    async def update_agent_status(self, agent_id: str, is_available: bool, current_customer_id: str | None = None) -> None:
+        async with self.db.async_session() as session:
+            result = await session.execute(
+                select(AgentModel).where(AgentModel.agent_id == agent_id)
+            )
+            db_agent = result.scalar_one_or_none()
+            
+            if db_agent:
+                db_agent.is_available = is_available
+                db_agent.current_customer_id = current_customer_id
+                await session.commit()
+
+================================================================================
+File: src/infrastructure/whatsapp/config.py
+================================================================================
+
+from dataclasses import dataclass
+
+@dataclass
+class WhatsAppConfig:
+    phone_number_id: str
+    access_token: str
+    api_version: str = "v18.0"
+    base_url: str = "https://graph.facebook.com"
+
+    @property
+    def api_url(self) -> str:
+        return f"{self.base_url}/{self.api_version}/{self.phone_number_id}/messages"
+
+================================================================================
+File: src/infrastructure/whatsapp/exceptions.py
+================================================================================
+
+class WhatsAppAPIError(Exception):
+    def __init__(self, message: str, status_code: int | None = None):
+        self.status_code = status_code
+        super().__init__(message)
+
+================================================================================
+File: src/infrastructure/whatsapp/sender.py
+================================================================================
+
+from typing import override, TypedDict
+import aiohttp
+import asyncio
+import logging
+
+from src.domain.interfaces.messaging import MessageSender
+from src.domain.messages import WhatsAppMessage, MessageType
+from .config import WhatsAppConfig
+from .exceptions import WhatsAppAPIError
+
+logger = logging.getLogger(__name__)
+
+class WhatsAppButton(TypedDict):
+    id: str
+    title: str
+
+
+class WhatsAppMessageSender(MessageSender):
+    config: WhatsAppConfig
+    max_retries: int
+    retry_delay: float
+
+    def __init__(self, config: WhatsAppConfig, max_retries: int = 3, retry_delay: float = 1.0):
+        self.config = config
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
+        self.session: aiohttp.ClientSession | None = None
+    
+    async def __aenter__(self):
+        self.session = aiohttp.ClientSession(headers=self._get_headers())
+        return self
+    
+    # async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self):
+        if self.session:
+            await self.session.close()
+    
+    def _get_headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.config.access_token}",
+            "Content-Type": "application/json"
+        }
+    
+    @override
+    async def send_message(self, message: WhatsAppMessage) -> bool:
+        """
+        Envia uma mensagem via WhatsApp Cloud API.
+        Retorna True se enviado com sucesso, False caso contrário.
+        """
+        if not self.session:
+            raise RuntimeError("WhatsAppMessageSender must be used as a context manager")
+        
+        payload = self._create_payload(message)
+        
+        for attempt in range(self.max_retries):
+            try:
+                async with self.session.post(self.config.api_url, json=payload) as response:
+                    response_data = await response.json()
+                    
+                    if response.status == 200:
+                        logger.info(
+                            "Message sent successfully",
+                            extra={
+                                "message_id": str(message.message_id),
+                                "recipient": message.recipient_id,
+                                "type": message.message_type.value
+                            }
+                        )
+                        return True
+                    
+                    error_message = response_data.get("error", {}).get("message", "Unknown error")
+                    logger.error(
+                        f"Failed to send message: {error_message}",
+                        extra={
+                            "message_id": str(message.message_id),
+                            "status_code": response.status,
+                            "attempt": attempt + 1
+                        }
+                    )
+                    
+                    if not self._should_retry(response.status):
+                        raise WhatsAppAPIError(error_message, response.status)
+                    
+                    await asyncio.sleep(self.retry_delay * (attempt + 1))
+                    
+            except aiohttp.ClientError as e:
+                logger.error(
+                    f"Network error while sending message: {str(e)}",
+                    extra={"message_id": str(message.message_id), "attempt": attempt + 1}
+                )
+                if attempt == self.max_retries - 1:
+                    raise WhatsAppAPIError(f"Network error: {str(e)}")
+                await asyncio.sleep(self.retry_delay * (attempt + 1))
+        
+        return False
+    
+    def _create_payload(self, message: WhatsAppMessage) -> dict[str, object]:
+        base_payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": message.recipient_id,
+        }
+        
+        if message.message_type == MessageType.TEXT:
+            return {
+                **base_payload,
+                "type": "text",
+                "text": {"body": message.content}
+            }
+        
+        elif message.message_type == MessageType.BUTTON_RESPONSE:
+            buttons = message.metadata.get("buttons", [])
+            buttons_list: list[WhatsAppButton] = []
+
+            if isinstance(buttons, list):
+                buttons_list= buttons
+                
+            return {
+                **base_payload,
+                "type": "interactive",
+                "interactive": {
+                    "type": "button",
+                    "body": {"text": message.content},
+                    "action": {
+                        "buttons": [
+                            {
+                                "type": "reply",
+                                "reply": {
+                                    "id": btn["id"],
+                                    "title": btn["title"]
+                                }
+                            }
+                            for btn in buttons_list
+                        ]
+                    }
+                }
+            }
+        
+        return {
+                **base_payload,
+                "type": "text",
+                "text": {"body": "Desculpe, algo deu errado"}
+            }
+    
+    def _should_retry(self, status_code: int) -> bool:
+        """Determina se deve tentar reenviar a mensagem baseado no status code"""
+        return status_code in {
+            408,  # Request Timeout
+            429,  # Too Many Requests
+            500,  # Internal Server Error
+            502,  # Bad Gateway
+            503,  # Service Unavailable
+            504   # Gateway Timeout
+        }
+
+================================================================================
+File: src/domain/repositories.py
+================================================================================
+
+from abc import ABC, abstractmethod
+
+from .entities import Agent, Customer, Department
+
+
+class CustomerRepository(ABC):
+    @abstractmethod
+    async def add(self, customer: Customer) -> None:
+        pass
+    
+    @abstractmethod
+    async def get(self, customer_id: str) -> Customer | None:
+        pass
+    
+    @abstractmethod
+    async def update(self, customer: Customer) -> None:
+        pass
+
+class AgentRepository(ABC):
+    @abstractmethod
+    async def get_available_agent(self, department: Department) -> Agent | None:
+        pass
+    
+    @abstractmethod
+    async def update_agent_status(self, agent_id: str, is_available: bool, current_customer_id: str | None = None) -> None:
+        pass
+    
+    @abstractmethod
+    async def get_by_id(self, agent_id: str) -> Agent | None:
+        pass
+
+================================================================================
+File: src/domain/services.py
+================================================================================
+
+from datetime import datetime
+from uuid import uuid4
+
+from .interfaces.messaging import MessageSender
+from .entities import CustomerStatus
+from .messages import WhatsAppMessage
+from .repositories import CustomerRepository, AgentRepository
+
+class MessageRouter:
+    customer_repo: CustomerRepository
+    agent_repo: AgentRepository
+    message_sender: MessageSender
+
+    def __init__(self, customer_repo: CustomerRepository, agent_repo: AgentRepository, message_sender: MessageSender):
+        self.customer_repo = customer_repo
+        self.agent_repo = agent_repo
+        self.message_sender = message_sender
+    
+    async def route_message(self, message: WhatsAppMessage) -> list[WhatsAppMessage]:
+        """
+        Rota as mensagens entre cliente, sistema e agente.
+        Retorna uma lista de mensagens que precisam ser enviadas como resposta.
+        """
+        if message.sender_id.startswith("AGENT_"):
+            return await self._handle_agent_message(message)
+        else:
+            return await self._handle_customer_message(message)
+    
+    async def _handle_customer_message(self, message: WhatsAppMessage) -> list[WhatsAppMessage]:
+        customer = await self.customer_repo.get(message.sender_id)
+        
+        if not customer:
+            # Novo cliente
+            return self._send_welcome_menu(message.sender_id)
+        
+        if customer.status == CustomerStatus.WAITING:
+            return [WhatsAppMessage.create_system_message(
+                message.sender_id,
+                "Você está na fila de espera. Em breve um agente irá atendê-lo."
+            )]
+        
+        if customer.status == CustomerStatus.IN_SERVICE:
+            # Encaminha mensagem para o agente atual
+            return [WhatsAppMessage(
+                message_id=uuid4(),
+                sender_id=message.sender_id,
+                recipient_id=customer.current_agent_id if customer.current_agent_id is not None else "",
+                content=f"CLIENTE {message.sender_id}: {message.content}",
+                message_type=message.message_type,
+                timestamp=datetime.now()
+            )]        
+        return []
+    
+    async def _handle_agent_message(self, message: WhatsAppMessage) -> list[WhatsAppMessage]:
+        # Extrai o ID do agente da mensagem
+        agent_id = message.sender_id
+        
+        # Verifica comandos especiais do agente
+        if message.content.startswith("/"):
+            return await self._handle_agent_command(agent_id, message.content)
+            
+        # Caso contrário, encaminha a mensagem para o cliente atual
+        agent = await self.agent_repo.get_by_id(agent_id)  # <-- Correção aqui
+        
+        if not agent or not agent.current_customer_id:
+            return [WhatsAppMessage.create_system_message(
+                agent_id,
+                "Você não está atendendo nenhum cliente no momento."
+            )]
+            
+        return [WhatsAppMessage(
+            message_id=uuid4(),
+            sender_id=agent_id,
+            recipient_id=agent.current_customer_id,
+            content=message.content,
+            message_type=message.message_type,
+            timestamp=datetime.now()
+        )]
+    
+    def _send_welcome_menu(self, customer_id: str) -> list[WhatsAppMessage]:
+        menu_content = """
+        Bem-vindo ao nosso atendimento! 
+        Por favor, escolha um departamento:
+        
+        1. Vendas
+        2. Suporte
+        3. Financeiro
+        """
+        return [WhatsAppMessage.create_system_message(customer_id, menu_content)]
+    
+    async def _handle_agent_command(self, agent_id: str, command: str) -> list[WhatsAppMessage]:
+        """
+        Processa comandos especiais dos agentes:
+        /fila - Mostra quantidade de clientes na fila
+        /proximo - Pega próximo cliente da fila
+        /encerrar - Encerra atendimento atual
+        """
+        command = command.lower()
+        if command == "/fila":
+            # Implementar lógica para mostrar fila
+            pass
+        elif command == "/proximo":
+            # Implementar lógica para pegar próximo cliente
+            pass
+        elif command == "/encerrar":
+            # Implementar lógica para encerrar atendimento
+            pass
+        
+        return [WhatsAppMessage.create_system_message(
+            agent_id,
+            "Comando processado com sucesso."
+        )]
+    
+    async def handle_incoming_message(self, message: WhatsAppMessage) -> None:
+        """
+        Processa uma mensagem recebida e envia as respostas apropriadas
+        """
+        response_messages = await self.route_message(message)
+        
+        # Envia cada mensagem de resposta
+        for response in response_messages:
+            success = await self.message_sender.send_message(response)
+            if not success:
+                # Aqui você pode implementar retry logic ou logging
+                print(f"Falha ao enviar mensagem para {response.recipient_id}")
+
+================================================================================
+File: src/domain/entities.py
+================================================================================
+
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
+
+
+class Department(Enum):
+    SALES = "sales"
+    SUPPORT = "support"
+    BILLING = "billing"
+
+
+class CustomerStatus(Enum):
+    WAITING = "waiting"
+    IN_SERVICE = "in_service"
+    FINISHED = "finished"
+
+
+@dataclass
+class Customer:
+    customer_id: str
+    department: Department | None
+    status: CustomerStatus
+    current_agent_id: str | None = None
+    waiting_since: datetime | None = None
+
+
+@dataclass
+class Agent:
+    agent_id: str
+    department: Department
+    is_available: bool = True
+    current_customer_id: str | None = None
+
+
+================================================================================
+File: src/domain/messages.py
+================================================================================
+
+from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
+from uuid import UUID, uuid4
+
+class MessageType(Enum):
+    TEXT = "text"
+    IMAGE = "image"
+    AUDIO = "audio"
+    VIDEO = "video"
+    DOCUMENT = "document"
+    BUTTON_RESPONSE = "button_response"
+
+
+@dataclass
+class WhatsAppMessage:
+    message_id: UUID
+    sender_id: str
+    recipient_id: str
+    content: str
+    message_type: MessageType
+    timestamp: datetime
+    metadata: dict[str, object] = {}
+    
+    @staticmethod
+    def create_system_message(recipient_id: str, content: str) -> 'WhatsAppMessage':
+        return WhatsAppMessage(
+            message_id=uuid4(),
+            sender_id="SYSTEM",
+            recipient_id=recipient_id,
+            content=content,
+            message_type=MessageType.TEXT,
+            timestamp=datetime.now()
+        )
+
+================================================================================
+File: src/domain/interfaces/messaging.py
+================================================================================
+
+from abc import ABC, abstractmethod
+
+from src.domain.messages import WhatsAppMessage
+
+class MessageSender(ABC):
+    @abstractmethod
+    async def send_message(self, message: WhatsAppMessage) -> bool:
+        """
+        Envia uma mensagem via WhatsApp.
+        Retorna True se enviado com sucesso, False caso contrário.
+        """
+        pass
