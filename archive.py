@@ -16,6 +16,9 @@ def combine_code_files():
                     file_path = Path(root) / file
                     relative_path = file_path.relative_to('.')
                     
+                    if file == '__init__.py' and os.path.getsize(file_path) == 0:
+                        continue
+                    
                     outfile.write(f"\n{'='*80}\n")
                     outfile.write(f"File: {relative_path}\n")
                     outfile.write(f"{'='*80}\n\n")
